@@ -1,6 +1,29 @@
+# Improved Streamlit Dashboard (Visually polished & responsive)
+
 import streamlit as st
 import pandas as pd
 import altair as alt
+
+st.set_page_config(page_title="Fuel Dashboard", layout="wide")
+
+# -------------- Global Styling --------------
+st.markdown(
+    """
+    <style>
+        .metric-card {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0px 2px 8px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .block-container {
+            padding-top: 2rem;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 # ---------- Load Data ----------
 @st.cache_data
@@ -15,12 +38,11 @@ def load_data():
     exp_coupons = pd.read_csv("expired_coupons_report.csv", parse_dates=["activation_date"])
     company_fuel = pd.read_csv("company_fuel_report.csv", parse_dates=["date"])
 
-
     return coupon, card, cash, stock, price, swipe, discounts, exp_coupons, company_fuel
 
 coupon_df, card_df, cash_df, stock_df, price_df, swipe_df, discounts_df, exp_coupons_df, company_fuel_df = load_data()
 
-# ---------- Sidebar ----------
+# ---------- Sidebar Navigation ----------
 st.sidebar.title("🚀 Navigation")
 page = st.sidebar.radio("Go to", [
     "Fuel Dashboard",
@@ -58,129 +80,131 @@ with st.sidebar:
         min_value=start_dt.date(),
         max_value=end_dt.date()
     )
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        start_dt = pd.to_datetime(date_range[0])
-        end_dt = pd.to_datetime(date_range[1])
-    else:
-        start_dt = pd.to_datetime(date_range[0])
-        end_dt = pd.to_datetime(date_range[0])
+    start_dt, end_dt = map(pd.to_datetime, date_range)
 
-# ---------- Fuel Dashboard ----------
+# -------------- Dashboard Pages --------------
 if page == "Fuel Dashboard":
     st.title("⛽ Fuel Sales & Stock Dashboard")
     st.markdown("---")
+
     coupon_filtered = filter_by_date(coupon_df, "sale_date")
     card_filtered = filter_by_date(card_df, "sale_date")
     cash_filtered = filter_by_date(cash_df, "sale_date")
     swipe_filtered = filter_by_date(swipe_df, "sale_date")
 
-    total_litres = coupon_filtered['total_litres'].sum() + card_filtered['total_litres'].sum() + \
-                   cash_filtered['total_litres'].sum() + swipe_filtered['total_litres'].sum()
-    total_revenue = coupon_filtered['total_amount'].sum() + card_filtered['total_amount'].sum() + \
-                    cash_filtered['total_amount'].sum() + swipe_filtered['total_amount'].sum()
+    total_litres = sum([
+        coupon_filtered['total_litres'].sum(),
+        card_filtered['total_litres'].sum(),
+        cash_filtered['total_litres'].sum(),
+        swipe_filtered['total_litres'].sum()
+    ])
 
+    total_revenue = sum([
+        coupon_filtered['total_amount'].sum(),
+        card_filtered['total_amount'].sum(),
+        cash_filtered['total_amount'].sum(),
+        swipe_filtered['total_amount'].sum()
+    ])
+
+    # Metrics Row
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("💳 Card Litres", f"{card_filtered['total_litres'].sum():,.0f}")
-    col2.metric("🎟️ Coupon Litres", f"{coupon_filtered['total_litres'].sum():,.0f}")
+    col2.metric("🎟 Coupon Litres", f"{coupon_filtered['total_litres'].sum():,.0f}")
     col3.metric("💵 Cash Litres", f"{cash_filtered['total_litres'].sum():,.0f}")
     col4.metric("💻 Swipe Litres", f"{swipe_filtered['total_litres'].sum():,.0f}")
     col5.metric("🧾 Total Revenue", f"${total_revenue:,.0f}")
 
+    # Combine Data
     combined_df = pd.concat([
         coupon_filtered.assign(channel='Coupon'),
         card_filtered.assign(channel='Card'),
         cash_filtered.assign(channel='Cash'),
         swipe_filtered.assign(channel='Swipe')
     ])
+
     grouped = combined_df.groupby(['sale_date', 'channel'])['total_litres'].sum().reset_index()
 
     st.subheader("📈 Daily Sales Trend")
-    st.altair_chart(
-        alt.Chart(grouped).mark_line(point=True).encode(
-            x='sale_date:T',
-            y='total_litres:Q',
-            color='channel:N',
-            tooltip=['sale_date:T', 'channel:N', 'total_litres:Q']
-        ).interactive().properties(height=400),
-        use_container_width=True
-    )
+    chart = alt.Chart(grouped).mark_line(point=True).encode(
+        x='sale_date:T',
+        y='total_litres:Q',
+        color='channel:N',
+        tooltip=['sale_date:T', 'channel:N', 'total_litres:Q']
+    ).properties(height=400).interactive()
+
+    st.altair_chart(chart, use_container_width=True)
 
     st.subheader("📊 Total Litres per Channel")
     bar_data = combined_df.groupby('channel')['total_litres'].sum().reset_index()
-    st.altair_chart(
-        alt.Chart(bar_data).mark_bar().encode(
-            x='channel:N',
-            y='total_litres:Q',
-            color='channel:N',
-            tooltip=['channel:N', 'total_litres:Q']
-        ),
-        use_container_width=True
+    bar_chart = alt.Chart(bar_data).mark_bar().encode(
+        x='channel:N',
+        y='total_litres:Q',
+        color='channel:N',
+        tooltip=['channel:N', 'total_litres:Q']
     )
+    st.altair_chart(bar_chart, use_container_width=True)
 
-# ---------- Sales Report ----------
 elif page == "Sales Report":
     st.title("📊 Sales Report")
     st.markdown("---")
+
     coupon_filtered = filter_by_date(coupon_df, "sale_date")
     card_filtered = filter_by_date(card_df, "sale_date")
     cash_filtered = filter_by_date(cash_df, "sale_date")
     swipe_filtered = filter_by_date(swipe_df, "sale_date")
 
-    sales_report = pd.concat([coupon_filtered, card_filtered, cash_filtered, swipe_filtered], ignore_index=True)
+    sales_report = pd.concat([
+        coupon_filtered, card_filtered, cash_filtered, swipe_filtered
+    ], ignore_index=True)
+
     combined_grouped = sales_report.groupby('sale_date')['total_litres'].sum().reset_index()
 
     st.subheader("📈 Total Litres Over Time")
-    st.altair_chart(
-        alt.Chart(combined_grouped).mark_line(point=True).encode(
-            x='sale_date:T',
-            y='total_litres:Q',
-            tooltip=['sale_date:T', 'total_litres:Q']
-        ).interactive(),
-        use_container_width=True
-    )
-    st.subheader("🗂 Detailed Sales Data")
-    st.dataframe(sales_report)
+    chart = alt.Chart(combined_grouped).mark_line(point=True).encode(
+        x='sale_date:T',
+        y='total_litres:Q',
+        tooltip=['sale_date:T', 'total_litres:Q']
+    ).interactive()
 
-# ---------- Expired Coupons ----------
+    st.altair_chart(chart, use_container_width=True)
+
+    st.subheader("🗂 Detailed Sales Data")
+    st.dataframe(sales_report, use_container_width=True)
+
 elif page == "Expired Coupons":
     st.title("📊 Expired Coupons Report")
     st.markdown("---")
-    st.dataframe(exp_coupons_df)
+    st.dataframe(exp_coupons_df, use_container_width=True)
 
-# ---------- Discounts Report ----------
 elif page == "Discounts Report":
     st.title("💸 Discounted Transactions")
     st.markdown("---")
-    st.dataframe(discounts_df)
+    st.dataframe(discounts_df, use_container_width=True)
 
-# ---------- Company Fuel Report ----------
 elif page == "Company Fuel Report":
     st.title("⛽ Company Fuel Sales Report")
     st.markdown("---")
 
     fuel_filtered = filter_by_date(company_fuel_df, "date")
+
     st.subheader("🗂 Company Fuel Table")
-    st.dataframe(fuel_filtered)
+    st.dataframe(fuel_filtered, use_container_width=True)
 
     diesel_usd = fuel_filtered.groupby('date')['diesel_usd_amount'].sum().reset_index()
     petrol_usd = fuel_filtered.groupby('date')['petrol_usd_amount'].sum().reset_index()
 
     st.subheader("📈 Diesel USD Sales Over Time")
-    st.altair_chart(
-        alt.Chart(diesel_usd).mark_line(point=True).encode(
-            x='date:T',
-            y='diesel_usd_amount:Q',
-            tooltip=['date:T', 'diesel_usd_amount:Q']
-        ).interactive(),
-        use_container_width=True
-    )
+    chart1 = alt.Chart(diesel_usd).mark_line(point=True).encode(
+        x='date:T',
+        y='diesel_usd_amount:Q',
+        tooltip=['date:T', 'diesel_usd_amount:Q']
+    ).interactive()
+    st.altair_chart(chart1, use_container_width=True)
 
     st.subheader("📈 Petrol USD Sales Over Time")
-    st.altair_chart(
-        alt.Chart(petrol_usd).mark_line(point=True).encode(
-            x='date:T',
-            y='petrol_usd_amount:Q',
-            tooltip=['date:T', 'petrol_usd_amount:Q']
-        ).interactive(),
-        use_container_width=True
-    )
+    chart2 = alt.Chart(petrol_usd).mark_line(point=True).encode(
+        x='date:T',
+        y='petrol_usd_amount:Q',
+        tooltip=['date:T', 'petrol_usd_amount:Q']
+    ).interactive()
+    st.altair_chart(chart2, use_container_width=True)

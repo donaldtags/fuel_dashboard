@@ -547,3 +547,10 @@ sale_date,service_station_id,service_station_name,product,total_litres,total_amo
 2025-11-11,98,Roadport,PETROL,40.0,61.6,1.54
 2025-11-11,145,Sunway City,PETROL,20.0,30.4,1.52
 2025-11-11,146,Banket,DIESEL,40.0,58.8,1.47
+2025-11-12,135,Cripps,PETROL,20.0,30.0,1.5
+2025-11-13,82,Runiville,DIESEL,20.0,29.6,1.48
+2025-11-13,82,Runiville,PETROL,20.0,30.8,1.54
+2025-11-13,84,Avondale,PETROL,20.0,30.8,1.54
+2025-11-13,88,Seke,PETROL,20.0,30.8,1.54
+2025-11-13,98,Roadport,PETROL,20.0,30.8,1.54
+2025-11-13,146,Banket,DIESEL,120.0,177.6,1.48
