@@ -1,23 +1,50 @@
-import pandas as pd
-from sqlalchemy import create_engine, text
+#!/usr/bin/env python3
+"""
+fuel_data_etl.py
+
+Fetches data from MariaDB/Postgres using provided queries and writes CSV files.
+Can run once (--once) or repeatedly every N seconds (default 60) using --interval.
+
+Writes a 'last_updated.txt' file with the timestamp of the last successful run.
+"""
+
+import argparse
+import logging
+import os
+import sys
+import time
 from datetime import datetime, timedelta
 
-# --- DATE RANGE ---
+import pandas as pd
+from sqlalchemy import create_engine, text
+
+# -------------------------
+# CONFIG / DATE RANGE
+# -------------------------
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+logger = logging.getLogger("fuel_data_etl")
+
+# default date range: last 300 days
 end_dt = datetime.today()
 start_dt = end_dt - timedelta(days=300)
 
-# --- CONNECTIONS ---
+# -------------------------
+# DATABASE CONNECTIONS
+# -------------------------
 mariadb_conn_str = "mysql+pymysql://reports:PcbPkHvrQDUJZG53@41.72.151.66:3306/trek_prod"
 postgres_conn_str = (
     "postgresql+psycopg2://reports:5vELF2V7OpRPOT@41.72.151.66:5432/site_sheets"
     "?options=-csearch_path=public"
 )
 
-mariadb_engine = create_engine(mariadb_conn_str)
-postgres_engine = create_engine(postgres_conn_str)
+# Create engines (these are lightweight; keep them open while script runs)
+mariadb_engine = create_engine(mariadb_conn_str, pool_pre_ping=True)
+postgres_engine = create_engine(postgres_conn_str, pool_pre_ping=True)
 
-# --- QUERIES ---
-
+# -------------------------
+# QUERIES (unchanged logic)
+# -------------------------
 coupon_sales_query = """
 SELECT
     DATE(created_at) AS sale_date,
@@ -81,18 +108,6 @@ GROUP BY DATE(transacted_at), service_stationid, service_station, product
 ORDER BY sale_date;
 """
 
-stock_query = f"""
-SELECT
-    date,
-    service_station,
-    product,
-    SUM(amount) AS closing_stock_litres
-FROM public.site_stock
-WHERE date BETWEEN '{start_dt.date()}' AND '{end_dt.date()}'
-GROUP BY date, service_station, product
-ORDER BY date DESC;
-"""
-
 swipe_sales_query = """
 SELECT
     DATE(created_at) AS sale_date,
@@ -107,6 +122,18 @@ WHERE type LIKE '%%SWIPE%%'
   AND created_at >= CURRENT_DATE - INTERVAL '300 days'
 GROUP BY DATE(created_at), site, product
 ORDER BY sale_date;
+"""
+
+stock_query = f"""
+SELECT
+    date,
+    service_station,
+    product,
+    SUM(amount) AS closing_stock_litres
+FROM public.site_stock
+WHERE date BETWEEN '{start_dt.date()}' AND '{end_dt.date()}'
+GROUP BY date, service_station, product
+ORDER BY date DESC;
 """
 
 price_query = """
@@ -159,7 +186,6 @@ WHERE c.activation_date IS NOT NULL
   AND c.status LIKE '%%ACTIVE%%';
 """
 
-# ✅ Lubricants Queries (fixed)
 Lubs_cash_query = """
 SELECT
     created_at,
@@ -206,7 +232,7 @@ GROUP BY DATE(t.created_at), c.name
 ORDER BY date, company_name;
 """
 
-companies_daily_litres_sales = """
+companies_daily_litres_sales_query = """
 SELECT
     t.created_at AS MONTH,
     c.name AS NAME,
@@ -223,76 +249,131 @@ WHERE t.created_at BETWEEN DATE_SUB(CURDATE(), INTERVAL 5 YEAR) AND CURDATE()
   AND t.description LIKE '%%SALE%%'
   AND (t.pan LIKE '%%DSL%%' OR t.pan LIKE '%%PTL%%')
 ORDER BY t.created_at DESC;
-
-
 """
 
+# -------------------------
+# LOAD DATA & EXPORT
+# -------------------------
+def load_data_and_export(output_folder="."):
+    """
+    Read from DB, export CSVs into output_folder, and write last_updated.txt
+    Returns the timestamp of successful run.
+    """
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logger.info("Starting ETL run at %s", ts)
 
-
-# --- LOAD DATA FUNCTION ---
-def load_data():
-    print("Loading coupon sales...")
-    coupon_df = pd.read_sql(coupon_sales_query, mariadb_engine)
-
-    print("Loading card sales...")
-    card_df = pd.read_sql(card_sales_query, mariadb_engine)
-
-    print("Loading stock data...")
-    stock_df = pd.read_sql(text(stock_query), postgres_engine)
-
-    print("Loading price data...")
-    price_df = pd.read_sql(text(price_query), postgres_engine)
-
-    print("Loading swipe sales...")
-    swipe_df = pd.read_sql(text(swipe_sales_query), postgres_engine)
-
-    print("Loading cash sales...")
+    # Read queries into dataframes (use text() for SQLAlchemy)
+    coupon_df = pd.read_sql(text(coupon_sales_query), mariadb_engine)
+    card_df = pd.read_sql(text(card_sales_query), mariadb_engine)
     cash_df = pd.read_sql(text(cash_sales_query), postgres_engine)
-
-    print("Loading discounted transactions...")
-    discounts_df = pd.read_sql(discounted_transaction_query, mariadb_engine)
-
-    print("Loading expired coupons report...")
-    exp_coupons_df = pd.read_sql(exp_coupons_query, mariadb_engine)
-
-    print("Loading cash lubricants...")
+    swipe_df = pd.read_sql(text(swipe_sales_query), postgres_engine)
+    stock_df = pd.read_sql(text(stock_query), postgres_engine)
+    price_df = pd.read_sql(text(price_query), postgres_engine)
+    discounts_df = pd.read_sql(text(discounted_transaction_query), mariadb_engine)
+    exp_coupons_df = pd.read_sql(text(exp_coupons_query), mariadb_engine)
     lubricants_cash_df = pd.read_sql(text(Lubs_cash_query), postgres_engine)
-
-    print("Loading card lubricants...")
-    lubricants_card_df = pd.read_sql(Lubs_card_query, mariadb_engine)
-
-    print("Loading company fuel sales (diesel/petrol)...")
+    lubricants_card_df = pd.read_sql(text(Lubs_card_query), mariadb_engine)
     company_fuel_df = pd.read_sql(text(company_fuel_query), mariadb_engine)
+    companies_daily_litres_sales_df = pd.read_sql(text(companies_daily_litres_sales_query), mariadb_engine)
 
-    print("Loading litres sales ...")
-    companies_daily_litres_sales_df = pd.read_sql(companies_daily_litres_sales, mariadb_engine)
+    # Export CSVs
+    def _to_csv(df, filename):
+        path = os.path.join(output_folder, filename)
+        df.to_csv(path, index=False)
+        logger.info("Wrote %s (%d rows)", filename, len(df))
 
-    return (
-        coupon_df, card_df, stock_df, price_df, swipe_df, cash_df,
-        discounts_df, exp_coupons_df, lubricants_cash_df, lubricants_card_df,
-        company_fuel_df, companies_daily_litres_sales_df
-    )
+    _to_csv(coupon_df, "coupon_sales.csv")
+    _to_csv(card_df, "card_sales.csv")
+    _to_csv(cash_df, "cash_sales.csv")
+    _to_csv(swipe_df, "swipe_sales.csv")
+    _to_csv(stock_df, "site_stock.csv")
+    _to_csv(price_df, "price_history.csv")
+    _to_csv(discounts_df, "discounted_transactions.csv")
+    _to_csv(exp_coupons_df, "expired_coupons_report.csv")
+    _to_csv(lubricants_cash_df, "lubricants_cash_report.csv")
+    _to_csv(lubricants_card_df, "lubricants_card_report.csv")
+    _to_csv(company_fuel_df, "company_fuel_report.csv")
+    _to_csv(companies_daily_litres_sales_df, "companies_daily_litres_sales.csv")
 
-# --- MAIN EXECUTION ---
+    # write last updated timestamp
+    last_updated_file = os.path.join(output_folder, "last_updated.txt")
+    with open(last_updated_file, "w", encoding="utf-8") as f:
+        f.write(ts + "\n")
+    logger.info("Wrote last_updated.txt = %s", ts)
+
+    return ts
+
+
+# -------------------------
+# MAIN: loop or single-run
+# -------------------------
+def main(args):
+    output_folder = args.output or "."
+    interval = args.interval
+    once = args.once
+
+    # Validate output folder
+    if not os.path.exists(output_folder):
+        logger.info("Output folder does not exist, creating: %s", output_folder)
+        os.makedirs(output_folder, exist_ok=True)
+
+    # Single-run
+    if once or (interval is None):
+        try:
+            ts = load_data_and_export(output_folder)
+            logger.info("ETL single-run complete at %s", ts)
+        except Exception as e:
+            logger.exception("ETL single-run failed: %s", e)
+            raise
+        finally:
+            # dispose engines
+            try:
+                mariadb_engine.dispose()
+                postgres_engine.dispose()
+            except Exception:
+                pass
+        return
+
+    # Looping mode
+    backoff_seconds = 5
+    try:
+        while True:
+            start_time = time.time()
+            try:
+                ts = load_data_and_export(output_folder)
+                logger.info("ETL successful at %s", ts)
+                backoff_seconds = 5  # reset backoff after success
+            except Exception as exc:
+                logger.exception("ETL run error: %s", exc)
+                # exponential backoff but continue loop
+                logger.info("Sleeping for %d seconds before retrying (backoff)", backoff_seconds)
+                time.sleep(backoff_seconds)
+                backoff_seconds = min(backoff_seconds * 2, 300)  # cap at 5 minutes
+            # sleep until next interval (accounting for time spent)
+            elapsed = time.time() - start_time
+            sleep_for = max(0, interval - elapsed)
+            logger.info("Next run in %.1f seconds", sleep_for)
+            time.sleep(sleep_for)
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt received, shutting down ETL.")
+    finally:
+        try:
+            mariadb_engine.dispose()
+            postgres_engine.dispose()
+        except Exception:
+            pass
+
+
 if __name__ == "__main__":
-    (
-        coupon_df, card_df, stock_df, price_df, swipe_df, cash_df,
-        discounts_df, exp_coupons_df, lubricants_cash_df, lubricants_card_df,
-        company_fuel_df, companies_daily_litres_sales
-    ) = load_data()
+    parser = argparse.ArgumentParser(description="Fuel data ETL: fetch from DB and export CSVs.")
+    parser.add_argument("--interval", type=int, default=60,
+                        help="Repeat interval in seconds (default 60). Use 0 or --once to run only once.")
+    parser.add_argument("--once", action="store_true", help="Run ETL once and exit (overrides --interval).")
+    parser.add_argument("--output", type=str, default=".", help="Output folder for CSVs (default current folder).")
+    args = parser.parse_args()
 
-    # Export to CSVs
-    coupon_df.to_csv("coupon_sales.csv", index=False)
-    card_df.to_csv("card_sales.csv", index=False)
-    stock_df.to_csv("site_stock.csv", index=False)
-    price_df.to_csv("price_history.csv", index=False)
-    swipe_df.to_csv("swipe_sales.csv", index=False)
-    cash_df.to_csv("cash_sales.csv", index=False)
-    discounts_df.to_csv("discounted_transactions.csv", index=False)
-    exp_coupons_df.to_csv("expired_coupons_report.csv", index=False)
-    lubricants_card_df.to_csv("lubricants_card_report.csv", index=False)
-    lubricants_cash_df.to_csv("lubricants_cash_report.csv", index=False)
-    company_fuel_df.to_csv("company_fuel_report.csv", index=False)
-    companies_daily_litres_sales.to_csv("companies_daily_litres_sales.csv", index=False)
+    # If user explicitly set interval=0 treat as once
+    if args.interval is not None and args.interval <= 0:
+        args.once = True
 
-    print("✅ Data exported to CSV. Ready for analysis or dashboard.")
+    main(args)
