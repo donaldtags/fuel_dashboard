@@ -206,6 +206,29 @@ GROUP BY DATE(t.created_at), c.name
 ORDER BY date, company_name;
 """
 
+companies_daily_litres_sales = """
+SELECT
+    t.created_at AS MONTH,
+    c.name AS NAME,
+    t.service_station AS SITE,
+    t.description AS DESCRIPTION,
+    t.pan AS CARD_NUMBER,
+    t.amount / 100 AS AMOUNT,
+    t.unit_price / 100 AS PRICE,
+    t.product AS PRODUCT
+FROM transaction t
+LEFT JOIN company c ON t.company_id = c.id
+WHERE t.created_at BETWEEN DATE_SUB(CURDATE(), INTERVAL 5 YEAR) AND CURDATE()
+  AND t.tid IS NOT NULL
+  AND t.description LIKE '%%SALE%%'
+  AND (t.pan LIKE '%%DSL%%' OR t.pan LIKE '%%PTL%%')
+ORDER BY t.created_at DESC;
+
+
+"""
+
+
+
 # --- LOAD DATA FUNCTION ---
 def load_data():
     print("Loading coupon sales...")
@@ -241,10 +264,13 @@ def load_data():
     print("Loading company fuel sales (diesel/petrol)...")
     company_fuel_df = pd.read_sql(text(company_fuel_query), mariadb_engine)
 
+    print("Loading litres sales ...")
+    companies_daily_litres_sales_df = pd.read_sql(companies_daily_litres_sales, mariadb_engine)
+
     return (
         coupon_df, card_df, stock_df, price_df, swipe_df, cash_df,
         discounts_df, exp_coupons_df, lubricants_cash_df, lubricants_card_df,
-        company_fuel_df
+        company_fuel_df, companies_daily_litres_sales_df
     )
 
 # --- MAIN EXECUTION ---
@@ -252,7 +278,7 @@ if __name__ == "__main__":
     (
         coupon_df, card_df, stock_df, price_df, swipe_df, cash_df,
         discounts_df, exp_coupons_df, lubricants_cash_df, lubricants_card_df,
-        company_fuel_df
+        company_fuel_df, companies_daily_litres_sales
     ) = load_data()
 
     # Export to CSVs
@@ -267,5 +293,6 @@ if __name__ == "__main__":
     lubricants_card_df.to_csv("lubricants_card_report.csv", index=False)
     lubricants_cash_df.to_csv("lubricants_cash_report.csv", index=False)
     company_fuel_df.to_csv("company_fuel_report.csv", index=False)
+    companies_daily_litres_sales.to_csv("companies_daily_litres_sales.csv", index=False)
 
     print("✅ Data exported to CSV. Ready for analysis or dashboard.")
