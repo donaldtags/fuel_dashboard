@@ -15,6 +15,14 @@ def load_data():
     exp_coupons = pd.read_csv("expired_coupons_report.csv", parse_dates=["activation_date"])
     company_fuel = pd.read_csv("company_fuel_report.csv", parse_dates=["date"])
     companies_daily_litres_sales = pd.read_csv("companies_daily_litres_sales.csv", parse_dates=["MONTH"])
+
+    # Convert ID columns to string to prevent pyarrow conversion errors
+    for df in [coupon, card, cash, swipe, stock, company_fuel, companies_daily_litres_sales]:
+        if "site_id" in df.columns:
+            df["site_id"] = df["site_id"].astype(str)
+        if "company_id" in df.columns:
+            df["company_id"] = df["company_id"].astype(str)
+
     return coupon, card, cash, stock, price, swipe, discounts, exp_coupons, company_fuel, companies_daily_litres_sales
 
 # Load datasets
@@ -56,6 +64,7 @@ start_dt = yesterday
 end_dt = today
 
 def filter_by_date(df, date_column):
+    df[date_column] = pd.to_datetime(df[date_column], errors="coerce")
     return df[(df[date_column] >= start_dt) & (df[date_column] <= end_dt)]
 
 with st.sidebar:
@@ -97,13 +106,17 @@ if page == "Fuel Dashboard":
 
     # Metrics
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("💳 Card Litres", f"{card_f['total_litres'].sum():,.0f}")
-    col2.metric("🎟️ Coupon Litres", f"{coupon_f['total_litres'].sum():,.0f}")
-    col3.metric("💵 Cash Litres", f"{cash_f['total_litres'].sum():,.0f}")
-    col4.metric("💻 Swipe Litres", f"{swipe_f['total_litres'].sum():,.0f}")
-    col5.metric("🧾 Total Revenue",
-                f"${(coupon_f['total_amount'].sum() + card_f['total_amount'].sum() + cash_f['total_amount'].sum() + swipe_f['total_amount'].sum()):,.0f}"
-                )
+    col1.metric("💳 Card Litres", f"{card_f['total_litres'].sum():,.0f}" if not card_f.empty else "0")
+    col2.metric("🎟️ Coupon Litres", f"{coupon_f['total_litres'].sum():,.0f}" if not coupon_f.empty else "0")
+    col3.metric("💵 Cash Litres", f"{cash_f['total_litres'].sum():,.0f}" if not cash_f.empty else "0")
+    col4.metric("💻 Swipe Litres", f"{swipe_f['total_litres'].sum():,.0f}" if not swipe_f.empty else "0")
+    total_revenue = sum([
+        coupon_f['total_amount'].sum() if not coupon_f.empty else 0,
+        card_f['total_amount'].sum() if not card_f.empty else 0,
+        cash_f['total_amount'].sum() if not cash_f.empty else 0,
+        swipe_f['total_amount'].sum() if not swipe_f.empty else 0
+    ])
+    col5.metric("🧾 Total Revenue", f"${total_revenue:,.0f}")
 
     # Combined chart
     combined = pd.concat([
@@ -111,7 +124,7 @@ if page == "Fuel Dashboard":
         card_f.assign(channel="Card"),
         cash_f.assign(channel="Cash"),
         swipe_f.assign(channel="Swipe")
-    ])
+    ], ignore_index=True)
     grouped = combined.groupby(["sale_date", "channel"])["total_litres"].sum().reset_index()
 
     st.subheader("📈 Daily Sales Trend")
@@ -145,7 +158,7 @@ elif page == "Sales Report":
     st.markdown("---")
 
     dfs = [filter_by_date(df, "sale_date") for df in [coupon_df, card_df, cash_df, swipe_df]]
-    filtered_sales = pd.concat(dfs, ignore_index=True)
+    filtered_sales = pd.concat([df for df in dfs if not df.empty], ignore_index=True)
     grouped = filtered_sales.groupby("sale_date")["total_litres"].sum().reset_index()
 
     st.subheader("📈 Total Litres Over Time")
