@@ -1,276 +1,136 @@
-# streamlit_app.py
 import os
-import math
-import datetime
 from datetime import datetime as dt
-
-import streamlit as st
 import pandas as pd
+import streamlit as st
 import altair as alt
 from streamlit_autorefresh import st_autorefresh
-
-# -----------------------
-# Auto-refresh (every 60s)
-# -----------------------
-# This causes Streamlit to rerun the script every minute.
-_refresh_count = st_autorefresh(interval=60 * 1000, key="fuel_dash_autorefresh")
-
-# -----------------------
-# Page config & small theme
-# -----------------------
-st.set_page_config(
-    page_title="Fuel Ops Dashboard",
-    layout="wide",
-    initial_sidebar_state="expanded",
+from sqlalchemy import create_engine, text
+from queries import (
+    coupon_sales_query, card_sales_query, cash_sales_query, swipe_sales_query,
+    stock_query, price_query, discounted_transaction_query, exp_coupons_query,
+Lubs_card_query, Lubs_cash_query, daily_fuel_sales
 )
 
-# Small CSS tweaks for look & feel
-st.markdown(
-    """
+# -----------------------
+# DB CONNECTIONS
+# -----------------------
+MARIADB_CONN_STR = "mysql+pymysql://reports:PcbPkHvrQDUJZG53@41.72.151.66:3306/trek_prod"
+POSTGRES_CONN_STR = "postgresql+psycopg2://reports:5vELF2V7OpRPOT@41.72.151.66:5432/site_sheets?options=-csearch_path=public"
+
+mariadb_engine = create_engine(MARIADB_CONN_STR, pool_pre_ping=True)
+postgres_engine = create_engine(POSTGRES_CONN_STR, pool_pre_ping=True)
+
+# -----------------------
+# Auto-refresh
+# -----------------------
+_refresh_count = st_autorefresh(interval=60*1000, key="fuel_dash_autorefresh")
+
+# -----------------------
+# Page config & CSS
+# -----------------------
+st.set_page_config(page_title="Fuel Ops Dashboard", layout="wide")
+st.markdown("""
 <style>
-/* Card like boxes */
-.last-updated-box {
-    background-color: #1E88E5;
-    color: #fff;
-    padding: 10px 16px;
-    border-radius: 10px;
-    font-weight: 600;
-    display: inline-block;
-}
-
-/* KPI small caps label */
-.kpi-label {
-    font-size: 14px;
-    color: #666;
-}
-
-/* reduce padding around Streamlit components to fit more */
-.block-container .css-1lcbmhc.e1fqkh3o3 {
-    padding-top: 1rem;
-}
-
-/* make table font slightly smaller */
-[data-testid="stDataFrameWrapper"] table {
-    font-size: 13px;
-}
+.last-updated-box { background-color: #1E88E5; color: #fff; padding: 10px 16px; border-radius: 10px; font-weight: 600; display: inline-block; }
+[data-testid="stDataFrameWrapper"] table { font-size: 13px; }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 # -----------------------
-# Utility: last-updated getter
-# -----------------------
-def get_last_updated_text(preferred_file="last_updated.txt", fallback_file="company_fuel_report.csv"):
-    # 1) preferred_file (written by ETL)
-    if os.path.exists(preferred_file):
-        try:
-            with open(preferred_file, "r", encoding="utf-8") as f:
-                txt = f.read().strip()
-                if txt:
-                    return txt + " (ETL)"
-        except Exception:
-            pass
-    # 2) fallback: file mtime of a main CSV
-    if os.path.exists(fallback_file):
-        mtime = os.path.getmtime(fallback_file)
-        return dt.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S") + " (CSV mtime)"
-    return "Unknown"
-
-# -----------------------
-# CACHED DATA LOADER (reads CSVs) - refreshes every 60s
+# Load data from DB safely
 # -----------------------
 @st.cache_data(ttl=60)
-def load_data_from_csv(base_path="."):
-    # Load CSVs used by the dashboard. If missing, return empty DataFrames
-    def safe_read(path, **kwargs):
-        full = os.path.join(base_path, path)
-        if os.path.exists(full):
-            try:
-                return pd.read_csv(full, **kwargs)
-            except Exception as e:
-                st.error(f"Failed to read {path}: {e}")
-                return pd.DataFrame()
-        return pd.DataFrame()
+def load_data():
+    data = {}
+    def query_db(query, engine):
+        try:
+            return pd.read_sql(text(query), engine)
+        except Exception:
+            return pd.DataFrame()
+    data["coupon"] = query_db(coupon_sales_query, mariadb_engine)
+    data["card"] = query_db(card_sales_query, mariadb_engine)
+    data["cash"] = query_db(cash_sales_query, postgres_engine)
+    data["swipe"] = query_db(swipe_sales_query, postgres_engine)
+    data["stock"] = query_db(stock_query, postgres_engine)
+    data["price"] = query_db(price_query, postgres_engine)
+    data["discounts"] = query_db(discounted_transaction_query, mariadb_engine)
+    data["exp_coupons"] = query_db(exp_coupons_query, mariadb_engine)
+    data["lubs_card"] = query_db(Lubs_card_query, mariadb_engine)
+    data["lubs_cash"] = query_db(Lubs_cash_query, postgres_engine)
+    data["daily_fuel_sales"] = query_db(daily_fuel_sales, mariadb_engine)
 
-    coupon = safe_read("coupon_sales.csv", parse_dates=["sale_date"])
-    card = safe_read("card_sales.csv", parse_dates=["sale_date"])
-    cash = safe_read("cash_sales.csv", parse_dates=["sale_date"])
-    swipe = safe_read("swipe_sales.csv", parse_dates=["sale_date"])
-    stock = safe_read("site_stock.csv", parse_dates=["date"])
-    price = safe_read("price_history.csv", parse_dates=["date"])
-    discounts = safe_read("discounted_transactions.csv", parse_dates=["created_at"])
-    exp_coupons = safe_read("expired_coupons_report.csv", parse_dates=["activation_date"])
-    company_fuel = safe_read("company_fuel_report.csv", parse_dates=["date"])
-    companies_litres = safe_read("companies_daily_litres_sales.csv", parse_dates=["MONTH"])
+    return data
 
-    # Normalise some columns safely (avoid crashes if missing)
-    for df in [coupon, card, cash, swipe, company_fuel, companies_litres]:
-        if "site_id" in df.columns:
-            df["site_id"] = df["site_id"].astype(str)
-        if "service_station_id" in df.columns:
-            df["service_station_id"] = df["service_station_id"].astype(str)
-        if "company_name" in df.columns:
-            df["company_name"] = df["company_name"].astype(str)
-
-    return {
-        "coupon": coupon,
-        "card": card,
-        "cash": cash,
-        "swipe": swipe,
-        "stock": stock,
-        "price": price,
-        "discounts": discounts,
-        "exp_coupons": exp_coupons,
-        "company_fuel": company_fuel,
-        "companies_litres": companies_litres,
-    }
-
-# Load
-DATA = load_data_from_csv()
+DATA = load_data()
 
 # -----------------------
-# Sidebar: role, date filters, navigation
+# Sidebar
 # -----------------------
 with st.sidebar:
     st.header("Controls")
-    # Role toggle (simple)
-    role = st.selectbox("Role", options=["Viewer", "Admin"], index=0)
-    st.write("")  # spacer
-    # Date range filter (default: yesterday - today)
+    role = st.selectbox("Role", ["Viewer", "Admin"])
     today = pd.Timestamp.today().normalize()
-    default_start = today - pd.Timedelta(days=1)
-    start_date, end_date = st.date_input(
-        "Date range (sale/transacted date)",
-        value=(default_start, today),
-        min_value=pd.Timestamp("2000-01-01"),
-        max_value=today,
-    )
-    # Page navigation
+    start_date, end_date = st.date_input("Date range", value=(today-pd.Timedelta(days=1), today))
     st.markdown("---")
-    page = st.radio(
-        "Go to",
-        [
-            "Dashboard",
-            "Sales (All channels)",
-            "Company Fuel",
-            "Discounts",
-            "Expired Coupons",
-            "Stock & Prices",
-            "Lubricants",
-        ],
-    )
-    st.markdown("---")
-    st.caption("Auto-refresh every 60s • ETL updates CSVs in background")
+    page = st.radio("Go to", ["Dashboard", "Sales (All channels)", "Company Fuel", "Discounts", "Expired Coupons", "Stock & Prices", "Lubricants"])
 
 # -----------------------
-# Helpers: filter by date safely
+# Helpers
 # -----------------------
 def safe_filter(df, date_col, start, end):
-    if df is None or df.empty:
-        return df
-    if date_col not in df.columns:
+    if df.empty or date_col not in df.columns:
         return df
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     return df[(df[date_col] >= pd.to_datetime(start)) & (df[date_col] <= pd.to_datetime(end))]
 
+def sum_safe(df, col):
+    return df[col].sum() if not df.empty and col in df.columns else 0
+
 # -----------------------
-# Small UI: top row with last-updated + refresh counter + role badge
+# Top row
 # -----------------------
-col1, col2, col3 = st.columns([3, 1, 1])
+col1, col2, col3 = st.columns([3,1,1])
 with col1:
     st.title("⛽ Fuel Operations Dashboard")
 with col2:
-    last_txt = get_last_updated_text()
+    last_txt = dt.now().strftime("%Y-%m-%d %H:%M:%S")
     st.markdown(f'<div class="last-updated-box">🔄 Last Updated<br><small>{last_txt}</small></div>', unsafe_allow_html=True)
 with col3:
-    st.metric(label="Auto refresh ticks", value=_refresh_count)
+    st.metric("Auto refresh ticks", _refresh_count)
     st.markdown(f"**Role:** {role}")
 
 # -----------------------
-# PAGE: Dashboard overview
+# PAGE: Dashboard
 # -----------------------
 def page_dashboard():
     st.subheader("Overview / KPIs")
-    # gather filtered data
     coupon = safe_filter(DATA["coupon"], "sale_date", start_date, end_date)
     card = safe_filter(DATA["card"], "sale_date", start_date, end_date)
     cash = safe_filter(DATA["cash"], "sale_date", start_date, end_date)
     swipe = safe_filter(DATA["swipe"], "sale_date", start_date, end_date)
 
-    # metrics calculations (safe)
-    def sum_safe(df, col):
-        if df is None or df.empty or col not in df.columns:
-            return 0
-        return df[col].sum()
+    k1, k2, k3, k4, k5 = st.columns([1.2]*4 + [1.4])
+    k1.metric("💳 Card Litres", f"{sum_safe(card,'total_litres'):,.0f}")
+    k2.metric("🎟️ Coupon Litres", f"{sum_safe(coupon,'total_litres'):,.0f}")
+    k3.metric("💵 Cash Litres", f"{sum_safe(cash,'total_litres'):,.0f}")
+    k4.metric("💻 Swipe Litres", f"{sum_safe(swipe,'total_litres'):,.0f}")
+    k5.metric("🧾 Total Revenue", f"${sum_safe(card,'total_amount')+sum_safe(coupon,'total_amount')+sum_safe(cash,'total_amount')+sum_safe(swipe,'total_amount'):,.0f}")
 
-    card_litres = sum_safe(card, "total_litres")
-    coupon_litres = sum_safe(coupon, "total_litres")
-    cash_litres = sum_safe(cash, "total_litres")
-    swipe_litres = sum_safe(swipe, "total_litres")
-
-    total_revenue = (
-        sum_safe(card, "total_amount")
-        + sum_safe(coupon, "total_amount")
-        + sum_safe(cash, "total_amount")
-        + sum_safe(swipe, "total_amount")
-    )
-
-    # KPI row
-    k1, k2, k3, k4, k5 = st.columns([1.2, 1.2, 1.2, 1.2, 1.4])
-    k1.metric("💳 Card Litres", f"{card_litres:,.0f}")
-    k2.metric("🎟️ Coupon Litres", f"{coupon_litres:,.0f}")
-    k3.metric("💵 Cash Litres", f"{cash_litres:,.0f}")
-    k4.metric("💻 Swipe Litres", f"{swipe_litres:,.0f}")
-    k5.metric("🧾 Total Revenue (local)", f"${total_revenue:,.0f}")
-
-    st.markdown("### Sales trend (combined channels)")
-    combined = pd.concat(
-        [
-            coupon.assign(channel="Coupon") if not coupon.empty else coupon,
-            card.assign(channel="Card") if not card.empty else card,
-            cash.assign(channel="Cash") if not cash.empty else cash,
-            swipe.assign(channel="Swipe") if not swipe.empty else swipe,
-        ],
-        ignore_index=True,
-        sort=False,
-    )
-
-    if combined.empty:
-        st.info("No sales data for selected range.")
-        return
-
-    # prepare for chart
-    if "sale_date" in combined.columns:
+    st.markdown("### Combined Sales Trend")
+    combined = pd.concat([coupon.assign(channel="Coupon"),
+                          card.assign(channel="Card"),
+                          cash.assign(channel="Cash"),
+                          swipe.assign(channel="Swipe")], ignore_index=True, sort=False)
+    if not combined.empty:
         grouped = combined.groupby(["sale_date", "channel"], dropna=False)["total_litres"].sum().reset_index()
-    else:
-        grouped = pd.DataFrame()
-
-    if not grouped.empty:
-        # animated chart: use 'frame' simulation via windowed data (Altair does not do streaming natively here)
-        line = (
-            alt.Chart(grouped)
-            .mark_line(point=True)
-            .encode(
-                x=alt.X("sale_date:T", title="Date"),
-                y=alt.Y("total_litres:Q", title="Litres"),
-                color="channel:N",
-                tooltip=["sale_date:T", "channel:N", "total_litres:Q"],
-            )
-            .properties(height=320)
-        )
+        line = alt.Chart(grouped).mark_line(point=True).encode(
+            x="sale_date:T", y="total_litres:Q", color="channel:N",
+            tooltip=["sale_date:T","channel:N","total_litres:Q"]
+        ).properties(height=320)
         st.altair_chart(line.interactive(), use_container_width=True)
 
-    st.markdown("### Top sites by litres (selected range)")
-    agg_site = combined.groupby(["service_station_name", "channel"], dropna=False)["total_litres"].sum().reset_index()
-    if not agg_site.empty:
-        top_sites = agg_site.groupby("service_station_name")["total_litres"].sum().reset_index().sort_values("total_litres", ascending=False).head(10)
-        st.bar_chart(top_sites.set_index("service_station_name")["total_litres"])
-    else:
-        st.write("No site data available.")
-
 # -----------------------
-# PAGE: Sales - All Channels (detailed)
+# PAGE: Sales (All channels)
 # -----------------------
 def page_sales():
     st.header("Sales — All Channels")
@@ -279,29 +139,18 @@ def page_sales():
     cash = safe_filter(DATA["cash"], "sale_date", start_date, end_date)
     swipe = safe_filter(DATA["swipe"], "sale_date", start_date, end_date)
 
-    tabs = st.tabs(["Combined", "By Channel", "Downloads"])
+    tabs = st.tabs(["Combined","By Channel","Downloads"])
     with tabs[0]:
-        dfs = [df for df in [coupon, card, cash, swipe] if (df is not None and not df.empty)]
-        if dfs:
-            combined = pd.concat(dfs, ignore_index=True, sort=False)
-            st.dataframe(combined)
-        else:
-            st.info("No sales data for the selected range.")
+        combined = pd.concat([coupon, card, cash, swipe], ignore_index=True, sort=False)
+        st.dataframe(combined)
     with tabs[1]:
-        st.subheader("Card")
-        st.dataframe(card)
-        st.subheader("Coupon")
-        st.dataframe(coupon)
-        st.subheader("Cash")
-        st.dataframe(cash)
-        st.subheader("Swipe")
-        st.dataframe(swipe)
+        st.subheader("Card"); st.dataframe(card)
+        st.subheader("Coupon"); st.dataframe(coupon)
+        st.subheader("Cash"); st.dataframe(cash)
+        st.subheader("Swipe"); st.dataframe(swipe)
     with tabs[2]:
-        # Downloads
         for name, df in [("coupon_sales.csv", coupon), ("card_sales.csv", card), ("cash_sales.csv", cash), ("swipe_sales.csv", swipe)]:
-            if df is None or df.empty:
-                st.write(f"{name}: (no data)")
-            else:
+            if not df.empty:
                 csv = df.to_csv(index=False).encode("utf-8")
                 st.download_button(f"Download {name}", data=csv, file_name=name, mime="text/csv")
 
@@ -309,21 +158,32 @@ def page_sales():
 # PAGE: Company Fuel
 # -----------------------
 def page_company_fuel():
-    st.header("Company Fuel Report")
-    df = safe_filter(DATA["company_fuel"], "date", start_date, end_date)
-    if df is None or df.empty:
-        st.info("No company-fuel data for the selected range.")
+    st.header("Company Fuel — Daily Breakdown")
+
+    df = safe_filter(DATA["daily_fuel_sales"], "date", start_date, end_date)
+
+    if df.empty:
+        st.warning("No company fuel data found for the selected date range.")
         return
 
-    st.metric("Rows", f"{len(df):,}")
+    # KPIs
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("⛽ Diesel USD (Litres)", f"{df['diesel_usd_litres'].sum():,.0f}")
+    col2.metric("💵 Diesel USD (Amount)", f"${df['diesel_usd_amount'].sum():,.2f}")
+    col3.metric("⛽ Petrol USD (Litres)", f"{df['petrol_usd_litres'].sum():,.0f}")
+    col4.metric("💵 Petrol USD (Amount)", f"${df['petrol_usd_amount'].sum():,.2f}")
+
+    # Download
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button("Download Company Fuel CSV", csv, "company_fuel.csv", "text/csv")
+
+    # Table
+    st.subheader("Daily Company Fuel Summary")
     st.dataframe(df)
 
-    # Company trends (top 10)
-    agg = df.groupby("company_name").agg({"diesel_usd_amount": "sum", "petrol_usd_amount": "sum"}).fillna(0)
-    agg["total_usd"] = agg["diesel_usd_amount"] + agg["petrol_usd_amount"]
-    top = agg.sort_values("total_usd", ascending=False).head(15).reset_index()
-    st.subheader("Top companies by USD sales")
-    st.bar_chart(top.set_index("company_name")["total_usd"])
+
+
+
 
 # -----------------------
 # PAGE: Discounts
@@ -331,77 +191,71 @@ def page_company_fuel():
 def page_discounts():
     st.header("Discounted Transactions")
     df = safe_filter(DATA["discounts"], "created_at", start_date, end_date)
-    if df is None or df.empty:
-        st.info("No discounted transactions.")
-        return
     st.dataframe(df)
-    # simple summary
-    total_disc = df["discount"].sum() if "discount" in df.columns else 0
-    st.metric("Total Discount Amount", f"${total_disc:,.2f}")
 
 # -----------------------
 # PAGE: Expired Coupons
 # -----------------------
 def page_expired_coupons():
-    st.header("Expired / Active Coupons (aged)")
+    st.header("Expired / Active Coupons")
     df = safe_filter(DATA["exp_coupons"], "activation_date", start_date, end_date)
-    if df is None or df.empty:
-        st.info("No coupon activity.")
-        return
     st.dataframe(df)
 
 # -----------------------
-# PAGE: Stock & Price
+# PAGE: Stock & Prices
 # -----------------------
 def page_stock_prices():
     st.header("Stock & Price History")
     stock = safe_filter(DATA["stock"], "date", start_date, end_date)
     price = safe_filter(DATA["price"], "date", start_date, end_date)
-
-    st.subheader("Stock snapshot (recent)")
-    st.dataframe(stock)
-
-    st.subheader("Price history")
-    st.dataframe(price)
+    st.subheader("Stock snapshot"); st.dataframe(stock)
+    st.subheader("Price history"); st.dataframe(price)
 
 # -----------------------
 # PAGE: Lubricants
 # -----------------------
 def page_lubricants():
     st.header("Lubricants — Cash & Card")
-    cash = DATA.get("cash", pd.DataFrame())
-    # We used lubricants export files in ETL: lubricants_cash_report.csv & lubricants_card_report.csv
-    # Read them on demand (not cached here)
-    lub_cash_path = "lubricants_cash_report.csv"
-    lub_card_path = "lubricants_card_report.csv"
+
+    lubs_card = safe_filter(DATA["lubs_card"], "created_at", start_date, end_date)
+    lubs_cash = safe_filter(DATA["lubs_cash"], "created_at", start_date, end_date)
 
     col1, col2 = st.columns(2)
     with col1:
-        if os.path.exists(lub_cash_path):
-            df_cash = pd.read_csv(lub_cash_path, parse_dates=["created_at"], low_memory=False)
-            df_cash = safe_filter(df_cash, "created_at", start_date, end_date)
-            st.subheader("Cash Lubricants")
-            st.dataframe(df_cash)
-            csv = df_cash.to_csv(index=False).encode("utf-8")
-            st.download_button("Download cash lubricants", data=csv, file_name=lub_cash_path)
-        else:
-            st.info("lubricants_cash_report.csv not present.")
-
+        st.metric("🛢️ Card Lubes Revenue", f"${sum_safe(lubs_card, 'amount'):,.2f}")
     with col2:
-        if os.path.exists(lub_card_path):
-            df_card = pd.read_csv(lub_card_path, parse_dates=["created_at"], low_memory=False)
-            df_card = safe_filter(df_card, "created_at", start_date, end_date)
-            st.subheader("Card Lubricants")
-            st.dataframe(df_card)
-            csv = df_card.to_csv(index=False).encode("utf-8")
-            st.download_button("Download card lubricants", data=csv, file_name=lub_card_path)
-        else:
-            st.info("lubricants_card_report.csv not present.")
+        st.metric("🛢️ Cash Lubes Revenue", f"${sum_safe(lubs_cash, 'amount'):,.2f}")
+
+    tabs = st.tabs(["Card Lubricants", "Cash Lubricants", "Downloads"])
+
+    with tabs[0]:
+        st.subheader("Card Lubricants Sales")
+        st.dataframe(lubs_card)
+
+    with tabs[1]:
+        st.subheader("Cash Lubricants Sales")
+        st.dataframe(lubs_cash)
+
+    with tabs[2]:
+        if not lubs_card.empty:
+            st.download_button(
+                "Download Card Lubricants CSV",
+                lubs_card.to_csv(index=False).encode("utf-8"),
+                "lubs_card.csv",
+                "text/csv"
+            )
+        if not lubs_cash.empty:
+            st.download_button(
+                "Download Cash Lubricants CSV",
+                lubs_cash.to_csv(index=False).encode("utf-8"),
+                "lubs_cash.csv",
+                "text/csv"
+            )
 
 # -----------------------
 # Router
 # -----------------------
-PAGE_FN = {
+PAGES = {
     "Dashboard": page_dashboard,
     "Sales (All channels)": page_sales,
     "Company Fuel": page_company_fuel,
@@ -411,29 +265,7 @@ PAGE_FN = {
     "Lubricants": page_lubricants,
 }
 
-# Render page
 try:
-    PAGE_FN.get(page, page_dashboard)()
+    PAGES.get(page, page_dashboard)()
 except Exception as e:
     st.error(f"Error rendering page: {e}")
-
-# -----------------------
-# Admin area (only visible to Admin role)
-# -----------------------
-if role == "Admin":
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Admin Tools")
-    col_a, col_b = st.sidebar.columns([1, 1])
-    if col_a.button("Reload CSVs now"):
-        # Clear the cached load_data function and reload
-        load_data_from_csv.clear()
-        DATA.update(load_data_from_csv())
-        st.experimental_rerun()
-    if col_b.button("Show data folder"):
-        st.sidebar.write(os.listdir("."))
-
-# -----------------------
-# Footer
-# -----------------------
-st.markdown("---")
-st.caption("Built for operations — ETL writes CSVs; dashboard auto-refreshes every 60s. Contact dev for customizations.")
