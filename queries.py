@@ -1,5 +1,10 @@
-# queries.py
 
+
+
+
+# ================================
+#  coupon_sales_query (MySQL)
+# ================================
 coupon_sales_query = """
 SELECT
     DATE(created_at) AS sale_date,
@@ -10,10 +15,14 @@ SELECT
     SUM(amount)/100 AS total_amount
 FROM trek_prod.coupon_transaction
 WHERE deleted = 0
-  AND response_description LIKE '%%Success%%'
+  AND response_description LIKE '%Success%'
+  AND created_at >= DATE_SUB(CURDATE(), INTERVAL 100 DAY)
 GROUP BY sale_date, service_station_id, service_station_name, product;
 """
 
+# ================================
+#  card_sales_query (MySQL)
+# ================================
 card_sales_query = """
 SELECT
     DATE(created_at) AS sale_date,
@@ -23,10 +32,15 @@ SELECT
     SUM(litres) AS total_litres,
     SUM(amount)/100 AS total_amount
 FROM trek_prod.transaction
-WHERE deleted = 0 AND debit_txn = 1
+WHERE deleted = 0 
+  AND debit_txn = 1
+  AND created_at >= DATE_SUB(CURDATE(), INTERVAL 100 DAY)
 GROUP BY sale_date, service_station_id, service_station, product;
 """
 
+# ================================
+#  cash_sales_query (PostgreSQL)
+# ================================
 cash_sales_query = """
 SELECT
     DATE(transacted_at) AS sale_date,
@@ -36,9 +50,13 @@ SELECT
     SUM(litres) AS total_litres,
     SUM(amount)/100 AS total_amount
 FROM public.cash_sale
+WHERE transacted_at >= NOW() - INTERVAL '100 days'
 GROUP BY DATE(transacted_at), service_stationid, service_station, product;
 """
 
+# ================================
+#  swipe_sales_query (PostgreSQL)
+# ================================
 swipe_sales_query = """
 SELECT
     DATE(created_at) AS sale_date,
@@ -48,10 +66,14 @@ SELECT
     SUM(litres)/100.0 AS total_litres,
     SUM(amount)/100.0 AS total_amount
 FROM public.transactions
-WHERE type LIKE '%%SWIPE%%'
+WHERE type LIKE '%SWIPE%'
+  AND created_at >= NOW() - INTERVAL '100 days'
 GROUP BY DATE(created_at), site, product;
 """
 
+# ================================
+#  stock_query (PostgreSQL)
+# ================================
 stock_query = """
 SELECT
     date,
@@ -59,10 +81,14 @@ SELECT
     product,
     SUM(amount) AS closing_stock_litres
 FROM public.site_stock
+WHERE date >= NOW() - INTERVAL '100 days'
 GROUP BY date, service_station, product
 ORDER BY date DESC;
 """
 
+# ================================
+#  price_query (PostgreSQL)
+# ================================
 price_query = """
 SELECT
     date,
@@ -70,10 +96,14 @@ SELECT
     product,
     AVG(competitor_price) AS price
 FROM public.price_comparisons
+WHERE date >= NOW() - INTERVAL '100 days'
 GROUP BY date, site, product
 ORDER BY date DESC;
 """
 
+# ================================
+#  discounted_transaction_query (MySQL)
+# ================================
 discounted_transaction_query = """
 SELECT
     t.created_at AS created_at,
@@ -90,9 +120,13 @@ SELECT
 FROM `transaction` t
 LEFT JOIN company co ON t.company_id = co.id
 LEFT JOIN customer c ON t.customer_id = c.id
-WHERE t.discount_litre NOT LIKE '%%0.00%%';
+WHERE t.discount_litre NOT LIKE '%0.00%'
+  AND t.created_at >= DATE_SUB(CURDATE(), INTERVAL 100 DAY);
 """
 
+# ================================
+#  exp_coupons_query (MySQL)
+# ================================
 exp_coupons_query = """
 SELECT
     c.barcode,
@@ -104,11 +138,15 @@ FROM coupon c
 JOIN coupon_booklet co ON c.coupon_booklet_id = co.id
 JOIN company c1 ON co.company_id = c1.id
 WHERE c.activation_date IS NOT NULL
-  AND c.activation_date < DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
-  AND c.status LIKE '%%ACTIVE%%';
+  AND c.activation_date >= DATE_SUB(CURDATE(), INTERVAL 100 DAY)
+  AND c.status LIKE '%ACTIVE%';
 """
 
-Lubs_card_query ="""sELECT
+# ================================
+#  Lubs_card_query (MySQL)
+# ================================
+Lubs_card_query = """
+SELECT
     created_at,
     service_station,
     amount / 100 AS amount,
@@ -117,47 +155,88 @@ Lubs_card_query ="""sELECT
     description
 FROM transaction t
 WHERE tid IS NOT NULL
+  AND created_at >= DATE_SUB(CURDATE(), INTERVAL 100 DAY)
   AND (
     product NOT LIKE '%diesel%' AND
     product NOT LIKE '%petrol%' AND
     product NOT LIKE '%blend%' AND
     description NOT LIKE '%diesel%' AND
     description NOT LIKE '%petrol%' AND
-    description NOT LIKE '%blend%'
-      and description not like '%MUNC%'
-      and description not like '%M&M%'
-      
-    )
-
+    description NOT LIKE '%blend%' AND
+    description NOT LIKE '%MUNC%' AND
+    description NOT LIKE '%M&M%'
+  );
 """
 
-Lubs_cash_query ="""SELECT
+# ================================
+#  Lubs_cash_query (PostgreSQL)
+# ================================
+Lubs_cash_query = """
+SELECT
     created_at,
     product,
     amount / 100 AS amount,
     litres AS quantity
 FROM cash_sale
-WHERE product NOT like '%PETROL%'
-  AND product NOT like '%DIESEL%'
-  AND product NOT like '%BLEND%'
-
+WHERE created_at >= NOW() - INTERVAL '100 days'
+  AND product NOT LIKE '%PETROL%'
+  AND product NOT LIKE '%DIESEL%'
+  AND product NOT LIKE '%BLEND%';
 """
 
-daily_fuel_sales = """
+# ================================
+#  daily_fuel_sales_query (MySQL)
+# ================================
+daily_fuel_sales_query = """
 SELECT DATE(t.created_at) as date,
        c.name AS company_name,
-       SUM(CASE WHEN t.product LIKE '%USD DIESEL%' OR t.product = 'CRIPPS DIESEL USD' OR t.product = 'GRANITESIDE DIESEL USD'THEN t.amount ELSE 0 END) / 100 AS diesel_usd_amount,
-       SUM(CASE WHEN t.product LIKE '%USD DIESEL%' OR t.product = 'CRIPPS DIESEL USD' OR t.product = 'GRANITESIDE DIESEL USD' THEN t.litres ELSE 0 END) AS diesel_usd_litres,
-       SUM(CASE WHEN t.product LIKE '%DIESEL LITRES%' THEN t.amount ELSE 0 END) / 100 AS diesel_litres_amount,
-       SUM(CASE WHEN t.product LIKE '%DIESEL LITRES%' THEN t.litres ELSE 0 END) AS diesel_litres_litres,
-       SUM(CASE WHEN t.product LIKE '%USD PETROL%' THEN t.amount ELSE 0 END) / 100 AS petrol_usd_amount,
-       SUM(CASE WHEN t.product LIKE '%USD PETROL%' THEN t.litres ELSE 0 END) AS petrol_usd_litres,
-       SUM(CASE WHEN t.product LIKE '%PETROL LITRES%' THEN t.amount ELSE 0 END) / 100 AS petrol_litres_amount,
-       SUM(CASE WHEN t.product LIKE '%PETROL LITRES%' THEN t.litres ELSE 0 END) AS petrol_litres_litres
+       SUM(CASE WHEN t.product LIKE '%USD DIESEL%' 
+                OR t.product = 'CRIPPS DIESEL USD' 
+                OR t.product = 'GRANITESIDE DIESEL USD'
+           THEN t.amount ELSE 0 END) / 100 AS diesel_usd_amount,
+       SUM(CASE WHEN t.product LIKE '%USD DIESEL%' 
+                OR t.product = 'CRIPPS DIESEL USD' 
+                OR t.product = 'GRANITESIDE DIESEL USD'
+           THEN t.litres ELSE 0 END) AS diesel_usd_litres,
+       SUM(CASE WHEN t.product LIKE '%DIESEL LITRES%'
+           THEN t.amount ELSE 0 END) / 100 AS diesel_litres_amount,
+       SUM(CASE WHEN t.product LIKE '%DIESEL LITRES%'
+           THEN t.litres ELSE 0 END) AS diesel_litres_litres,
+       SUM(CASE WHEN t.product LIKE '%USD PETROL%'
+           THEN t.amount ELSE 0 END) / 100 AS petrol_usd_amount,
+       SUM(CASE WHEN t.product LIKE '%USD PETROL%'
+           THEN t.litres ELSE 0 END) AS petrol_usd_litres,
+       SUM(CASE WHEN t.product LIKE '%PETROL LITRES%'
+           THEN t.amount ELSE 0 END) / 100 AS petrol_litres_amount,
+       SUM(CASE WHEN t.product LIKE '%PETROL LITRES%'
+           THEN t.litres ELSE 0 END) AS petrol_litres_litres
 FROM company c
-         LEFT JOIN transaction t ON c.id = t.company_id
+LEFT JOIN transaction t ON c.id = t.company_id
 WHERE t.debit_txn = 1
   AND t.transaction_type = 'SALE'
+  AND t.created_at >= DATE_SUB(CURDATE(), INTERVAL 100 DAY)
 GROUP BY DATE(t.created_at), c.name
-ORDER BY date, name
+ORDER BY date, name;
+"""
+
+# ================================
+#  daily_litres_sale_query (MySQL)
+# ================================
+daily_litres_sale_query = """
+SELECT
+    t.created_at AS sale_date,
+    c.name AS company_name,
+    t.service_station AS site,
+    t.description AS description,
+    t.pan AS card_number,
+    t.amount / 100 AS amount,
+    t.unit_price / 100 AS price,
+    t.product AS product
+FROM transaction t
+LEFT JOIN company c ON t.company_id = c.id
+WHERE t.tid IS NOT NULL
+  AND t.created_at >= DATE_SUB(CURDATE(), INTERVAL 100 DAY)
+  AND t.description LIKE '%SALE%'
+  AND (t.pan LIKE '%DSL%' OR t.pan LIKE '%PTL%')
+ORDER BY t.created_at DESC;
 """
