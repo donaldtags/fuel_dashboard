@@ -1,4 +1,4 @@
-date,service_station,product,closing_stock_litres
-2025-10-09,Head Office,PETROL,1.0
-2025-10-08,Head Office,PETROTRADE DIESEL,1.0
-2025-10-08,Head Office,PETROTRADE PETROL,1.0
+date_local,service_station,product,closing_stock_litres
+2025-10-08,Head Office,PETROL,1.0
+2025-10-07,Head Office,PETROTRADE DIESEL,1.0
+2025-10-07,Head Office,PETROTRADE PETROL,1.0

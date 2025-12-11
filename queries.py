@@ -1,7 +1,6 @@
 
 
 
-
 # ================================
 #  coupon_sales_query (MySQL)
 # ================================
@@ -16,7 +15,7 @@ SELECT
 FROM trek_prod.coupon_transaction
 WHERE deleted = 0
   AND response_description LIKE '%Success%'
-  AND created_at >= DATE_SUB(CURDATE(), INTERVAL 100 DAY)
+ 
 GROUP BY sale_date, service_station_id, service_station_name, product;
 """
 
@@ -34,7 +33,7 @@ SELECT
 FROM trek_prod.transaction
 WHERE deleted = 0 
   AND debit_txn = 1
-  AND created_at >= DATE_SUB(CURDATE(), INTERVAL 100 DAY)
+ 
 GROUP BY sale_date, service_station_id, service_station, product;
 """
 
@@ -50,7 +49,7 @@ SELECT
     SUM(litres) AS total_litres,
     SUM(amount)/100 AS total_amount
 FROM public.cash_sale
-WHERE transacted_at >= NOW() - INTERVAL '100 days'
+
 GROUP BY DATE(transacted_at), service_stationid, service_station, product;
 """
 
@@ -67,7 +66,6 @@ SELECT
     SUM(amount)/100.0 AS total_amount
 FROM public.transactions
 WHERE type LIKE '%SWIPE%'
-  AND created_at >= NOW() - INTERVAL '100 days'
 GROUP BY DATE(created_at), site, product;
 """
 
@@ -81,7 +79,7 @@ SELECT
     product,
     SUM(amount) AS closing_stock_litres
 FROM public.site_stock
-WHERE date >= NOW() - INTERVAL '100 days'
+
 GROUP BY date, service_station, product
 ORDER BY date DESC;
 """
@@ -96,7 +94,7 @@ SELECT
     product,
     AVG(competitor_price) AS price
 FROM public.price_comparisons
-WHERE date >= NOW() - INTERVAL '100 days'
+
 GROUP BY date, site, product
 ORDER BY date DESC;
 """
@@ -121,7 +119,6 @@ FROM `transaction` t
 LEFT JOIN company co ON t.company_id = co.id
 LEFT JOIN customer c ON t.customer_id = c.id
 WHERE t.discount_litre NOT LIKE '%0.00%'
-  AND t.created_at >= DATE_SUB(CURDATE(), INTERVAL 100 DAY);
 """
 
 # ================================
@@ -138,7 +135,6 @@ FROM coupon c
 JOIN coupon_booklet co ON c.coupon_booklet_id = co.id
 JOIN company c1 ON co.company_id = c1.id
 WHERE c.activation_date IS NOT NULL
-  AND c.activation_date >= DATE_SUB(CURDATE(), INTERVAL 100 DAY)
   AND c.status LIKE '%ACTIVE%';
 """
 
@@ -155,7 +151,6 @@ SELECT
     description
 FROM transaction t
 WHERE tid IS NOT NULL
-  AND created_at >= DATE_SUB(CURDATE(), INTERVAL 100 DAY)
   AND (
     product NOT LIKE '%diesel%' AND
     product NOT LIKE '%petrol%' AND
@@ -178,8 +173,7 @@ SELECT
     amount / 100 AS amount,
     litres AS quantity
 FROM cash_sale
-WHERE created_at >= NOW() - INTERVAL '100 days'
-  AND product NOT LIKE '%PETROL%'
+WHERE product NOT LIKE '%PETROL%'
   AND product NOT LIKE '%DIESEL%'
   AND product NOT LIKE '%BLEND%';
 """
@@ -214,7 +208,6 @@ FROM company c
 LEFT JOIN transaction t ON c.id = t.company_id
 WHERE t.debit_txn = 1
   AND t.transaction_type = 'SALE'
-  AND t.created_at >= DATE_SUB(CURDATE(), INTERVAL 100 DAY)
 GROUP BY DATE(t.created_at), c.name
 ORDER BY date, name;
 """
